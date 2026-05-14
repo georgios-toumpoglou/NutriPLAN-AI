@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<!--
+    generate_plan.html — NutriPLAN AI
+    The main form page for generating a new meal plan.
+    This is the first page the user lands on after logging in.
+
+    The form collects:
+    - Diet preference (5 visual toggle buttons)
+    - Goal (dropdown: lose / keep / gain)
+    - Activity level (dropdown: sedentary → very active)
+    - Current weight (number input with kg/lb toggle)
+
+    On submit (POST to /generate-plan):
+    - Flask reads the values, calls the Anthropic API via call_claude()
+    - The returned plan is stored in session['current_plan']
+    - User is redirected to /plan-result
+
+    Weight handling: the visible input is in kg or lb depending on selection.
+    Before submit, JS converts lb → kg and writes it into a hidden input
+    (weight_kg) which Flask reads. Same pattern as height in signup.html.
+
+    Emoji rendering: Twemoji library is loaded to ensure diet button emoji
+    look consistent across Windows, Android, and iOS.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generate Meal Plan — NutriPLAN AI</title>
+
+    <!-- Google Fonts: Quicksand -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@300..700&display=swap" rel="stylesheet">
+    <!-- Bootstrap 5 -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons — person icon, hamburger -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <!-- Twemoji — replaces text emoji with consistent SVG images across all platforms -->
+    <script src="https://cdn.jsdelivr.net/npm/@twemoji/api@latest/dist/twemoji.min.js" crossorigin="anonymous"></script>
+
+    <style>
+        /* ══ DESIGN TOKENS ══ */
+        :root {
+            --green-mid:    #99CC99;
+            --white:        #FFFFFF;
+            --green-light:  #CCFFCC;
+            --green-dark:   #5E995E;
+            --green-bright: #99FF99;
+            --bg:           #F7FAF7;
+            --text-dark:    #2d5a2d;
+            --text-body:    #3a5a3a;
+            --sidebar-w:    260px;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html { color-scheme: light only; }
+
+        body {
+            font-family: 'Quicksand', sans-serif;
+            background-color: var(--bg) !important;
+            color: var(--text-body) !important;
+            font-weight: 400;
+            min-height: 100vh;
+        }
+
+        /* ══ SIDEBAR ══ */
+        .sidebar {
+            position: fixed;
+            top: 0; left: 0;
+            width: var(--sidebar-w);
+            height: 100vh;
+            background: var(--green-mid);
+            display: flex;
+            flex-direction: column;
+            padding: 28px 24px 32px;
+            z-index: 200;
+            overflow-y: auto;
+        }
+
+        .sidebar-logo img { height: 52px; width: auto; display: block; margin-bottom: 28px; }
+        .sidebar-user { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+        .sidebar-user i { font-size: 1.4rem; color: var(--white); }
+        .sidebar-user-name { font-family: 'Quicksand', sans-serif; font-weight: 700; font-size: 1rem; color: var(--white); }
+
+        /* Log out sits just below the nav links with a small gap */
+        .sidebar-logout {
+            font-family: 'Quicksand', sans-serif; font-weight: 500; font-size: 0.88rem;
+            color: var(--white); text-decoration: none; margin-top: 16px;
+            padding-left: 14px; display: block; opacity: 0.85; transition: opacity 0.2s;
+        }
+        .sidebar-logout:hover { opacity: 1; text-decoration: none; color: var(--white); }
+
+        .sidebar-divider { border: none; border-top: 1px solid rgba(255,255,255,0.35); margin-bottom: 20px; }
+        .sidebar-nav { display: flex; flex-direction: column; gap: 4px; }
+
+        .sidebar-link {
+            font-family: 'Quicksand', sans-serif; font-weight: 600; font-size: 1rem;
+            color: var(--text-dark); text-decoration: none; padding: 10px 14px;
+            border-radius: 12px; transition: background 0.2s, color 0.2s;
+        }
+        .sidebar-link:hover { background: rgba(255,255,255,0.30); color: var(--text-dark); }
+        .sidebar-link.active { background: rgba(255,255,255,0.40); color: var(--text-dark); font-weight: 700; }
+
+        /* ══ HAMBURGER (mobile only) ══
+           Hidden on desktop via display:none.
+           Gets .hidden class while the sidebar is open to avoid overlap. */
+        .hamburger-btn {
+            display: none; position: fixed; top: 16px; left: 16px; z-index: 300;
+            background: var(--green-dark); border: none; border-radius: 10px;
+            width: 42px; height: 42px; align-items: center; justify-content: center;
+            cursor: pointer; color: var(--white); font-size: 1.3rem;
+        }
+
+        .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.25); z-index: 150; }
+        .sidebar-overlay.open { display: block; }
+
+        /* ══ MAIN CONTENT ══
+           Offset from the left by the sidebar width.
+           align-items: center centres the content block horizontally. */
+        .main-content {
+            margin-left: var(--sidebar-w);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        /* max-width: 700px + text-align: center keeps the form nicely centred */
+        .content-area {
+            flex: 1;
+            padding: 48px 40px 40px;
+            width: 100%;
+            max-width: 700px;
+            text-align: center;
+        }
+
+        /* Flash messages */
+        .flash-success { background: #d4edda; color: #155724; border-radius: 10px; padding: 12px 18px; margin-bottom: 24px; font-weight: 600; font-size: 0.95rem; text-align: center; }
+        .flash-error   { background: #f8d7da; color: #842029; border-radius: 10px; padding: 12px 18px; margin-bottom: 24px; font-weight: 600; font-size: 0.95rem; text-align: center; }
+
+        /* Page title: "Generate" in medium green (lighter), "meal plan!" in bold dark */
+        .page-title { font-family: 'Quicksand', sans-serif; font-weight: 700; font-size: 2.4rem; color: var(--green-dark); margin-bottom: 6px; line-height: 1.1; }
+        .page-title span { color: var(--green-mid); font-weight: 400; }
+        .page-subtitle { font-family: 'Quicksand', sans-serif; font-weight: 400; font-size: 1rem; color: var(--text-body); margin-bottom: 28px; }
+
+        /* Robot chef image — percentage width so it scales with the viewport */
+        .robot-img { width: 40%; max-width: 220px; display: block; margin: 0 auto 32px; }
+
+        /* ══ TWEMOJI CSS ══
+           Twemoji replaces emoji text nodes with <img class="emoji"> elements.
+           These rules ensure they render at the correct size inside diet buttons. */
+        .diet-icon img.emoji {
+            width: 2.8rem !important;
+            height: 2.8rem !important;
+            display: block;
+            margin: 0 auto;
+        }
+
+        /* Section headings above each form group */
+        .section-label {
+            font-family: 'Quicksand', sans-serif; font-weight: 700; font-size: 1.25rem;
+            color: var(--green-dark); text-align: center; margin-bottom: 14px;
+        }
+
+        /* ══ DIET BUTTONS ══
+           5 square toggle buttons displayed in a single row on desktop.
+           flex-wrap: nowrap prevents them from wrapping.
+           On mobile, flex-wrap switches to wrap and buttons become larger. */
+        .diet-grid {
+            display: flex; gap: 12px; flex-wrap: nowrap;
+            justify-content: center; margin-bottom: 36px;
+        }
+
+        .diet-btn {
+            display: flex; flex-direction: column; align-items: center;
+            justify-content: center; gap: 6px;
+            width: 120px; height: 120px; border-radius: 18px;
+            border: 2.5px solid var(--green-mid); background: var(--white);
+            cursor: pointer; font-family: 'Quicksand', sans-serif;
+            font-weight: 600; font-size: 0.9rem; color: var(--text-body);
+            transition: all 0.18s;
+        }
+
+        .diet-btn .diet-icon { font-size: 2.8rem; }
+        .diet-btn:hover { background: var(--green-light); border-color: var(--green-dark); }
+        /* Selected state: dark green background, white text */
+        .diet-btn.selected { background: var(--green-dark); border-color: var(--green-dark); color: var(--white); }
+
+        /* ══ GOAL & ACTIVITY DROPDOWNS ══
+           Reused class for both dropdowns — same styling, different name= attributes. */
+        .goal-select {
+            width: 100%; max-width: 500px; display: block; margin: 0 auto 24px;
+            padding: 12px 18px; border: 2px solid var(--green-dark); border-radius: 10px;
+            background: var(--white); font-family: 'Quicksand', sans-serif;
+            font-weight: 600; font-size: 1rem; color: var(--text-body);
+            appearance: auto; outline: none; cursor: pointer;
+        }
+
+        /* ══ WEIGHT UNIT TOGGLE ══
+           Active = dark green filled. Inactive = white with dark text. */
+        .unit-toggle {
+            display: flex; gap: 10px; justify-content: center; margin-bottom: 20px;
+            max-width: 500px; margin-left: auto; margin-right: auto;
+        }
+
+        .unit-btn {
+            flex: 1; padding: 9px 0; border: 2px solid var(--green-dark);
+            border-radius: 20px; background: var(--green-mid); color: var(--white);
+            font-family: 'Quicksand', sans-serif; font-weight: 600; font-size: 0.9rem;
+            cursor: pointer; transition: background 0.2s, color 0.2s;
+        }
+        .unit-btn.active { background: var(--green-dark); color: var(--white); }
+        .unit-btn:not(.active) { background: var(--white); color: var(--text-body); }
+
+        /* ══ WEIGHT INPUT ══
+           Visible number input (shown in kg or lb depending on toggle).
+           The actual submitted value is always kg via the hidden input. */
+        .weight-label { font-family: 'Quicksand', sans-serif; font-weight: 700; font-size: 1.25rem; color: var(--green-dark); text-align: center; margin-bottom: 10px; }
+
+        .weight-input {
+            display: block; width: 100%; max-width: 500px; margin: 0 auto 32px;
+            padding: 12px 18px; border: 2px solid var(--green-dark); border-radius: 10px;
+            background: var(--white); font-family: 'Quicksand', sans-serif;
+            font-size: 1rem; color: var(--text-body); outline: none;
+        }
+        .weight-input:focus { box-shadow: 0 0 0 3px rgba(94,153,94,0.25); }
+
+        /* ══ GENERATE BUTTON ══ */
+        .btn-generate {
+            display: block; margin: 0 auto;
+            background: var(--green-dark); color: var(--white); border: none;
+            border-radius: 22px; padding: 13px 48px;
+            font-family: 'Quicksand', sans-serif; font-weight: 700; font-size: 1.1rem;
+            cursor: pointer; transition: background 0.2s;
+        }
+        .btn-generate:hover { background: var(--text-dark); }
+
+        /* ══ FOOTER ══ — width: 100% ensures it spans the full main-content area */
+        footer {
+            background-color: var(--green-dark); color: var(--white);
+            text-align: center; padding: 20px 0;
+            font-family: 'Quicksand', sans-serif; font-weight: 500;
+            font-size: 0.82rem; letter-spacing: 0.04em; width: 100%;
+        }
+        footer span { color: var(--green-bright); font-weight: 700; }
+
+        /* ══ RESPONSIVE — MOBILE (≤768px) ══ */
+        @media (max-width: 768px) {
+            .hamburger-btn { display: flex; }
+            /* .hidden class added by JS when sidebar opens, removed when it closes */
+            .hamburger-btn.hidden { display: none; }
+            .sidebar { transform: translateX(-100%); transition: transform 0.28s ease; }
+            .sidebar.open { transform: translateX(0); }
+            .main-content { margin-left: 0; }
+            .content-area { padding: 70px 24px 40px; }
+            .page-title   { font-size: 1.8rem; }
+            /* On mobile: diet buttons wrap and become larger to be tap-friendly */
+            .diet-grid { flex-wrap: wrap; gap: 14px; }
+            .diet-btn  { width: 140px; height: 140px; font-size: 0.92rem; }
+            .diet-btn .diet-icon { font-size: 2.2rem; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ══ HAMBURGER BUTTON (mobile) ══ -->
+<button class="hamburger-btn" id="hamburgerBtn" onclick="openSidebar()">
+    <i class="bi bi-list"></i>
+</button>
+
+<!-- Overlay behind the sidebar on mobile -->
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+
+<!-- ══ SIDEBAR ══ -->
+<aside class="sidebar" id="sidebar">
+
+    <!-- Logo links back to this same page (generate-plan = logged-in home) -->
+    <div class="sidebar-logo">
+        <a href="/generate-plan">
+            <img src="{{ url_for('static', filename='img/logo.png') }}" alt="NutriPLAN AI">
+        </a>
+    </div>
+
+    <!-- Username pulled from session, set at login -->
+    <div class="sidebar-user">
+        <i class="bi bi-person-circle"></i>
+        <span class="sidebar-user-name">{{ session.get('user_name', '') }}</span>
+    </div>
+
+    <hr class="sidebar-divider">
+
+    <nav class="sidebar-nav">
+        <!-- "Generate meal plan" is the active page -->
+        <a href="/generate-plan" class="sidebar-link active">Generate meal plan</a>
+        <a href="/my-plans"      class="sidebar-link">My plans</a>
+        <a href="/profile"       class="sidebar-link">Profile</a>
+    </nav>
+
+    <!-- Log out below nav links with small gap (margin-top: 16px) -->
+    <a href="/logout" class="sidebar-logout">Log out</a>
+
+</aside>
+
+<!-- ══ MAIN CONTENT ══ -->
+<div class="main-content">
+    <div class="content-area">
+
+        <!-- Flash messages (e.g. "Something went wrong") -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}
+                <div class="flash-{{ category }}">{{ message }}</div>
+            {% endfor %}
+        {% endwith %}
+
+        <h1 class="page-title"><span>Generate </span>meal plan!</h1>
+        <p class="page-subtitle">Let our AI chef generate your weekly meal plan!</p>
+
+        <!-- Decorative robot chef image — stored in static/img/ -->
+        <img src="{{ url_for('static', filename='img/robot_chef.png') }}"
+             alt="AI Chef" class="robot-img">
+
+        <!-- ══ GENERATION FORM ══
+             POSTs to /generate-plan. Flask reads diet, goal, activity, weight_kg.
+             diet is submitted via a hidden input updated by JS (selectDiet).
+             weight_kg is submitted via a hidden input filled by JS before submit. -->
+        <form method="POST" action="/generate-plan">
+
+            <!-- CSRF token — required by Flask-WTF for all non-WTForms POST forms -->
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+            <!-- ══ PREFERRED DIET ══
+                 Visual toggle buttons — only one can be selected at a time.
+                 JS updates the hidden input 'diet' when a button is clicked.
+                 Default: "Anything" (pre-selected on page load). -->
+            <div class="section-label">Preferred Diet</div>
+            <div class="diet-grid">
+                <button type="button" class="diet-btn selected" data-diet="anything" onclick="selectDiet(this)">
+                    <span class="diet-icon">🥪</span> Anything
+                </button>
+                <button type="button" class="diet-btn" data-diet="keto" onclick="selectDiet(this)">
+                    <span class="diet-icon">🥓</span> Keto
+                </button>
+                <button type="button" class="diet-btn" data-diet="mediterranean" onclick="selectDiet(this)">
+                    <span class="diet-icon">🫒</span> Mediterranean
+                </button>
+                <button type="button" class="diet-btn" data-diet="vegan" onclick="selectDiet(this)">
+                    <span class="diet-icon">🌱</span> Vegan
+                </button>
+                <button type="button" class="diet-btn" data-diet="vegetarian" onclick="selectDiet(this)">
+                    <span class="diet-icon">🥦</span> Vegetarian
+                </button>
+            </div>
+            <!-- Hidden field holding the currently selected diet value -->
+            <input type="hidden" id="selected_diet" name="diet" value="anything">
+
+            <!-- ══ GOAL ══ -->
+            <div class="section-label">Goal</div>
+            <select class="goal-select" name="goal">
+                <option value="lose">Lose Weight</option>
+                <option value="keep">Keep Weight</option>
+                <option value="gain">Gain Muscle</option>
+            </select>
+
+            <!-- ══ ACTIVITY LEVEL ══
+                 Passed to Claude to calibrate daily calorie recommendation. -->
+            <div class="section-label">Activity Level</div>
+            <select class="goal-select" name="activity">
+                <option value="sedentary">Sedentary (little or no exercise)</option>
+                <option value="light">Light (1–3 days/week)</option>
+                <option value="moderate" selected>Moderate (3–5 days/week)</option>
+                <option value="active">Very Active (6–7 days/week)</option>
+            </select>
+
+            <!-- ══ WEIGHT ══
+                 kg/lb toggle — active button = dark green, inactive = white.
+                 The visible input collects a number in the selected unit.
+                 JS converts to kg if lb is selected before submit. -->
+            <div class="unit-toggle">
+                <button type="button" class="unit-btn active" id="btn-kg" onclick="setUnit('kg')">Metric (kg)</button>
+                <button type="button" class="unit-btn"        id="btn-lb" onclick="setUnit('lb')">Imperial (lb)</button>
+            </div>
+
+            <div class="weight-label">Weight</div>
+            <!-- Visible input — not submitted; JS writes its value (converted) to weight_kg -->
+            <input type="number" class="weight-input" id="weight_display"
+                   placeholder="e.g. 78" min="1" max="999" autocomplete="off">
+            <!-- Hidden input — always holds kg value; this is what Flask reads -->
+            <input type="hidden" id="weight_kg" name="weight_kg" value="">
+
+            <button type="submit" class="btn-generate">Generate</button>
+
+        </form>
+
+    </div>
+
+    <footer>
+        © COPYRIGHT 2026 • NUTRIPLANAI • ALL RIGHTS RESERVED • Developed by <span>GToumb</span>
+    </footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    // ── TWEMOJI ──────────────────────────────────────────────────────────────────
+    // Runs after the page loads. Replaces all emoji text in the DOM with
+    // <img class="emoji"> SVG elements for consistent rendering across platforms.
+    window.addEventListener('load', function() {
+        twemoji.parse(document.body, { folder: 'svg', ext: '.svg' });
+    });
+
+    // ── SIDEBAR TOGGLE (mobile) ──────────────────────────────────────────────────
+    function openSidebar() {
+        document.getElementById('sidebar').classList.add('open');
+        document.getElementById('sidebarOverlay').classList.add('open');
+        // Hide the hamburger so it doesn't sit on top of the open sidebar
+        document.getElementById('hamburgerBtn').classList.add('hidden');
+    }
+    function closeSidebar() {
+        document.getElementById('sidebar').classList.remove('open');
+        document.getElementById('sidebarOverlay').classList.remove('open');
+        document.getElementById('hamburgerBtn').classList.remove('hidden');
+    }
+
+    // ── DIET BUTTON SELECTION ────────────────────────────────────────────────────
+    // Removes .selected from all buttons, adds it to the clicked one,
+    // and updates the hidden 'diet' input with the button's data-diet value.
+    function selectDiet(btn) {
+        document.querySelectorAll('.diet-btn').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        document.getElementById('selected_diet').value = btn.dataset.diet;
+    }
+
+    // ── WEIGHT UNIT TOGGLE ───────────────────────────────────────────────────────
+    let currentUnit = 'kg';
+
+    function setUnit(unit) {
+        currentUnit = unit;
+        // Update button appearance
+        document.getElementById('btn-kg').classList.toggle('active', unit === 'kg');
+        document.getElementById('btn-lb').classList.toggle('active', unit === 'lb');
+        // Update placeholder and clear any entered value when switching units
+        document.getElementById('weight_display').placeholder = unit === 'kg' ? 'e.g. 78' : 'e.g. 172';
+        document.getElementById('weight_display').value = '';
+    }
+
+    // ── PRE-SUBMIT: WEIGHT CONVERSION ────────────────────────────────────────────
+    // Validates that weight was entered, converts lb → kg if needed,
+    // and writes the kg value into the hidden 'weight_kg' field for Flask.
+    document.querySelector('form').addEventListener('submit', function(e) {
+        const raw = parseFloat(document.getElementById('weight_display').value);
+
+        if (!raw || raw <= 0) {
+            e.preventDefault();  // block the submit
+            alert('Please enter your weight before generating a plan.');
+            return;
+        }
+
+        // Convert to kg if imperial, rounded to 1 decimal place
+        const kg = currentUnit === 'kg' ? raw : Math.round(raw * 0.453592 * 10) / 10;
+        document.getElementById('weight_kg').value = kg;
+    });
+</script>
+</body>
+</html>

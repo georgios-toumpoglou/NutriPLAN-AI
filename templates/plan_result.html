@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<!--
+    plan_result.html — NutriPLAN AI
+    Displays a generated or saved weekly meal plan.
+
+    This template serves TWO different scenarios, controlled by the
+    'saved_plan_title' variable passed from the route:
+
+    1. FRESH PLAN (saved_plan_title is None / not set):
+       - Arrived from /generate-plan → /plan-result after Claude generated a new plan.
+       - Shows "Your weekly meal plan!" as title.
+       - Shows Save and Regenerate buttons.
+       - Sidebar highlights "Generate meal plan".
+
+    2. SAVED PLAN (saved_plan_title is set):
+       - Arrived from /my-plans → /view-plan/<id>.
+       - Shows the user's chosen plan name as the title.
+       - Shows "Back to My Plans" and "Delete Plan" buttons instead.
+       - Sidebar highlights "My plans".
+
+    Modals:
+    - Save modal: asks for a plan name, POSTs to /save-plan.
+    - Regenerate modal: textarea for change instructions, POSTs to /regenerate.
+    Both modals close when clicking the overlay or Cancel button.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your Meal Plan — NutriPLAN AI</title>
+
+    <!-- Google Fonts: Quicksand -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@300..700&display=swap" rel="stylesheet">
+    <!-- Bootstrap 5 -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+
+    <style>
+        /* ══ DESIGN TOKENS ══ */
+        :root {
+            --green-mid:    #99CC99;
+            --white:        #FFFFFF;
+            --green-light:  #CCFFCC;
+            --green-dark:   #5E995E;
+            --green-bright: #99FF99;
+            --bg:           #F7FAF7;
+            --text-dark:    #2d5a2d;
+            --text-body:    #3a5a3a;
+            --sidebar-w:    260px;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html { color-scheme: light only; }
+        body { font-family: 'Quicksand', sans-serif; background-color: var(--bg) !important; color: var(--text-body) !important; min-height: 100vh; }
+
+        /* ══ SIDEBAR ══ (same as all authenticated pages) */
+        .sidebar { position: fixed; top: 0; left: 0; width: var(--sidebar-w); height: 100vh; background: var(--green-mid); display: flex; flex-direction: column; padding: 28px 24px 32px; z-index: 200; overflow-y: auto; }
+        .sidebar-logo img { height: 52px; width: auto; display: block; margin-bottom: 28px; }
+        .sidebar-user { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+        .sidebar-user i { font-size: 1.4rem; color: var(--white); }
+        .sidebar-user-name { font-family: 'Quicksand', sans-serif; font-weight: 700; font-size: 1rem; color: var(--white); }
+        .sidebar-divider { border: none; border-top: 1px solid rgba(255,255,255,0.35); margin-bottom: 20px; }
+        .sidebar-nav { display: flex; flex-direction: column; gap: 4px; }
+        .sidebar-link { font-family: 'Quicksand', sans-serif; font-weight: 600; font-size: 1rem; color: var(--text-dark); text-decoration: none; padding: 10px 14px; border-radius: 12px; transition: background 0.2s; }
+        .sidebar-link:hover { background: rgba(255,255,255,0.30); color: var(--text-dark); }
+        .sidebar-link.active { background: rgba(255,255,255,0.40); font-weight: 700; }
+        .sidebar-logout { font-family: 'Quicksand', sans-serif; font-weight: 500; font-size: 0.88rem; color: var(--white); text-decoration: none; margin-top: 16px; padding-left: 14px; display: block; opacity: 0.85; transition: opacity 0.2s; }
+        .sidebar-logout:hover { opacity: 1; color: var(--white); }
+
+        /* ══ HAMBURGER ══ */
+        .hamburger-btn { display: none; position: fixed; top: 16px; left: 16px; z-index: 300; background: var(--green-dark); border: none; border-radius: 10px; width: 42px; height: 42px; align-items: center; justify-content: center; cursor: pointer; color: var(--white); font-size: 1.3rem; }
+        .hamburger-btn.hidden { display: none !important; }
+        .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.25); z-index: 150; }
+        .sidebar-overlay.open { display: block; }
+
+        /* ══ MAIN CONTENT ══ */
+        .main-content { margin-left: var(--sidebar-w); min-height: 100vh; display: flex; flex-direction: column; align-items: center; }
+        .content-area { flex: 1; padding: 48px 40px 40px; width: 100%; max-width: 800px; }
+
+        /* Flash messages */
+        .flash-success { background:#d4edda; color:#155724; border-radius:10px; padding:12px 18px; margin-bottom:24px; font-weight:600; font-size:0.95rem; text-align:center; }
+        .flash-error   { background:#f8d7da; color:#842029; border-radius:10px; padding:12px 18px; margin-bottom:24px; font-weight:600; font-size:0.95rem; text-align:center; }
+
+        /* Title — changes based on whether this is a fresh or saved plan */
+        .page-title { font-family: 'Quicksand', sans-serif; font-weight: 700; font-size: 2.2rem; color: var(--green-dark); margin-bottom: 6px; text-align: center; }
+        /* "weekly" in the fresh plan title is lighter green */
+        .page-title span { color: var(--green-mid); font-weight: 400; }
+        .page-subtitle { font-family: 'Quicksand', sans-serif; font-weight: 400; font-size: 0.97rem; color: var(--text-body); text-align: center; margin-bottom: 32px; }
+
+        /* ══ DAY TABS ══
+           Desktop: 7 tabs in a single row, each tab connects to its panel below.
+           The active tab has the same background as the panel (green-mid),
+           creating a visual "connected" effect.
+           Mobile: horizontally scrollable row of rounded pill buttons. */
+        .day-tabs { display: flex; gap: 6px; flex-wrap: nowrap; margin-bottom: 0; border-bottom: none; }
+
+        .day-tab {
+            font-family: 'Quicksand', sans-serif; font-weight: 600; font-size: 0.88rem;
+            padding: 9px 14px;
+            /* Rounded top corners only — bottom connects to the panel */
+            border-radius: 10px 10px 0 0;
+            border: 2px solid var(--green-mid); border-bottom: none;
+            background: var(--white); color: var(--text-body);
+            cursor: pointer; transition: background 0.18s, color 0.18s;
+        }
+
+        /* Active tab matches the panel background — looks connected */
+        .day-tab.active { background: var(--green-mid); color: var(--text-dark); font-weight: 700; }
+
+        /* ══ DAY PANELS ══
+           Only the .active panel is visible — all others are display:none.
+           JS swaps the .active class when a tab is clicked. */
+        .day-panels { position: relative; }
+
+        .day-panel { display: none; background: var(--green-mid); border-radius: 0 12px 12px 12px; padding: 28px 32px; }
+        .day-panel.active { display: block; }
+
+        /* ══ MEAL ROWS ══
+           Each panel has 4 rows: breakfast, lunch, dinner, snack.
+           Separated by a semi-transparent white border. */
+        .meal-row { margin-bottom: 20px; padding-bottom: 18px; border-bottom: 1px solid rgba(255,255,255,0.30); }
+        .meal-row:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+
+        /* Meal type label (BREAKFAST / LUNCH etc.) — dark green, uppercase, spaced */
+        .meal-type { font-family: 'Quicksand', sans-serif; font-weight: 700; font-size: 0.85rem; color: var(--text-dark); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+        .meal-name { font-family: 'Quicksand', sans-serif; font-weight: 700; font-size: 1.05rem; color: var(--white); margin-bottom: 3px; }
+        .meal-desc { font-family: 'Quicksand', sans-serif; font-weight: 400; font-size: 0.9rem; color: rgba(255,255,255,0.85); line-height: 1.5; }
+
+        /* ══ CALORIES BAR ══
+           Dark green banner above the day tabs showing the recommended daily intake.
+           Only rendered if plan.calories_per_day is present in the JSON. */
+        .calories-bar { background: var(--green-dark); border-radius: 12px; padding: 12px 20px; text-align: center; margin-bottom: 20px; font-family: 'Quicksand', sans-serif; font-weight: 700; font-size: 1.05rem; color: var(--white); }
+        /* The number itself is highlighted in bright green */
+        .calories-bar span { color: var(--green-bright); font-size: 1.3rem; }
+
+        /* ══ CLOSE BUTTON (shown when viewing a saved plan) ══
+           Outline style — navigates back to /my-plans. */
+        .btn-close-plan { display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 2px solid var(--green-dark); border-radius: 22px; padding: 10px 28px; font-family: 'Quicksand', sans-serif; font-weight: 700; font-size: 1rem; color: var(--green-dark); text-decoration: none; cursor: pointer; transition: background 0.2s; }
+        .btn-close-plan:hover { background: var(--green-light); color: var(--green-dark); }
+
+        /* ══ DELETE BUTTON (shown when viewing a saved plan) ══ */
+        .btn-delete-this { background: #e74c3c; border: none; border-radius: 22px; padding: 10px 28px; font-family: 'Quicksand', sans-serif; font-weight: 700; font-size: 1rem; color: var(--white); cursor: pointer; transition: background 0.2s; }
+        .btn-delete-this:hover { background: #c0392b; }
+
+        /* ══ ACTION BUTTONS ROW ══
+           Centred row holding the two action buttons (Save+Regenerate OR Back+Delete). */
+        .action-row { display: flex; gap: 14px; justify-content: center; margin-top: 28px; flex-wrap: wrap; }
+
+        /* Save — dark green filled */
+        .btn-save-plan { background: var(--green-dark); border: none; border-radius: 22px; padding: 12px 40px; font-family: 'Quicksand', sans-serif; font-weight: 700; font-size: 1rem; color: var(--white); cursor: pointer; transition: background 0.2s; }
+        .btn-save-plan:hover { background: var(--text-dark); }
+
+        /* Regenerate — white with green outline */
+        .btn-regenerate { background: var(--white); border: 2px solid var(--green-dark); border-radius: 22px; padding: 12px 40px; font-family: 'Quicksand', sans-serif; font-weight: 700; font-size: 1rem; color: var(--green-dark); cursor: pointer; transition: background 0.2s; }
+        .btn-regenerate:hover { background: var(--green-light); }
+
+        /* ══ MODALS ══
+           Full-screen overlay (z-index: 500) with a centred white card.
+           display:none by default — JS adds .open to show them.
+           Clicking the overlay (not the card) closes the modal. */
+        .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.40); z-index: 500; align-items: center; justify-content: center; }
+        .modal-overlay.open { display: flex; }
+
+        .modal-box { background: var(--white); border-radius: 20px; padding: 32px 36px; width: 100%; max-width: 440px; box-shadow: 0 8px 32px rgba(0,0,0,0.15); }
+
+        .modal-title { font-family: 'Quicksand', sans-serif; font-weight: 700; font-size: 1.3rem; color: var(--green-dark); margin-bottom: 16px; }
+        .modal-subtitle { font-family: 'Quicksand', sans-serif; font-weight: 400; font-size: 0.9rem; color: var(--text-body); margin-bottom: 14px; }
+
+        /* Single-line text input (Save modal — plan name) */
+        .modal-input { width: 100%; border: 2px solid var(--green-mid); border-radius: 10px; padding: 10px 14px; font-family: 'Quicksand', sans-serif; font-size: 0.97rem; color: var(--text-body); outline: none; margin-bottom: 20px; transition: border-color 0.2s; }
+        .modal-input:focus { border-color: var(--green-dark); }
+
+        /* Multi-line textarea (Regenerate modal — change instructions) */
+        .modal-textarea { width: 100%; border: 2px solid var(--green-mid); border-radius: 10px; padding: 10px 14px; font-family: 'Quicksand', sans-serif; font-size: 0.97rem; color: var(--text-body); outline: none; margin-bottom: 20px; resize: vertical; min-height: 110px; transition: border-color 0.2s; }
+        .modal-textarea:focus { border-color: var(--green-dark); }
+
+        /* Modal buttons row — aligned to the right */
+        .modal-btn-row { display: flex; gap: 12px; justify-content: flex-end; }
+
+        .modal-btn-cancel { background: transparent; border: 2px solid var(--green-mid); border-radius: 16px; padding: 9px 26px; font-family: 'Quicksand', sans-serif; font-weight: 600; font-size: 0.95rem; color: var(--text-body); cursor: pointer; transition: background 0.2s; }
+        .modal-btn-cancel:hover { background: var(--green-light); }
+
+        .modal-btn-ok { background: var(--green-dark); border: none; border-radius: 16px; padding: 9px 26px; font-family: 'Quicksand', sans-serif; font-weight: 700; font-size: 0.95rem; color: var(--white); cursor: pointer; transition: background 0.2s; }
+        .modal-btn-ok:hover { background: var(--text-dark); }
+
+        /* ══ FOOTER ══ */
+        footer { background-color: var(--green-dark); color: var(--white); text-align: center; padding: 20px 0; font-family: 'Quicksand', sans-serif; font-weight: 500; font-size: 0.82rem; letter-spacing: 0.04em; width: 100%; }
+        footer span { color: var(--green-bright); font-weight: 700; }
+
+        /* ══ RESPONSIVE — MOBILE (≤768px) ══ */
+        @media (max-width: 768px) {
+            .hamburger-btn { display: flex; }
+            .sidebar { transform: translateX(-100%); transition: transform 0.28s ease; }
+            .sidebar.open { transform: translateX(0); }
+            .main-content { margin-left: 0; }
+            .content-area { padding: 70px 16px 40px; }
+            .page-title   { font-size: 1.7rem; }
+
+            /* On mobile: tabs scroll horizontally as rounded pills
+               (no "connected" bottom border effect — simpler and cleaner) */
+            .day-tabs { flex-wrap: nowrap; overflow-x: auto; gap: 10px; padding-bottom: 4px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+            .day-tabs::-webkit-scrollbar { display: none; }
+            .day-tab { flex-shrink: 0; border-radius: 12px; border: 2px solid var(--green-mid); padding: 10px 18px; }
+
+            .day-panel { border-radius: 12px; padding: 20px 18px; }
+            .modal-box { margin: 20px; padding: 24px 22px; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ══ HAMBURGER ══ -->
+<button class="hamburger-btn" id="hamburgerBtn" onclick="openSidebar()">
+    <i class="bi bi-list"></i>
+</button>
+
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+
+<!-- ══ SIDEBAR ══
+     The active link switches based on whether this is a fresh or saved plan:
+     - Fresh plan  → "Generate meal plan" active
+     - Saved plan  → "My plans" active
+     This is controlled by the saved_plan_title variable from the route. -->
+<aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+        <a href="/generate-plan">
+            <img src="{{ url_for('static', filename='img/logo.png') }}" alt="NutriPLAN AI">
+        </a>
+    </div>
+    <div class="sidebar-user">
+        <i class="bi bi-person-circle"></i>
+        <span class="sidebar-user-name">{{ session.get('user_name', '') }}</span>
+    </div>
+    <hr class="sidebar-divider">
+    <nav class="sidebar-nav">
+        <!-- Jinja ternary: active only if NOT viewing a saved plan -->
+        <a href="/generate-plan" class="sidebar-link {% if not saved_plan_title %}active{% endif %}">Generate meal plan</a>
+        <!-- Jinja ternary: active only if viewing a saved plan -->
+        <a href="/my-plans"      class="sidebar-link {% if saved_plan_title %}active{% endif %}">My plans</a>
+        <a href="/profile"       class="sidebar-link">Profile</a>
+    </nav>
+    <a href="/logout" class="sidebar-logout">Log out</a>
+</aside>
+
+<!-- ══ REGENERATE MODAL ══
+     Hidden by default. Opened when user clicks "Regenerate".
+     POSTs changes text to /regenerate which calls Claude with the modifications. -->
+<div class="modal-overlay" id="regenerateModal">
+    <div class="modal-box">
+        <div class="modal-title">Modify your plan</div>
+        <p class="modal-subtitle">Describe what you'd like to change (e.g. "Remove fish from Day 3 and add chicken"):</p>
+        <form method="POST" action="/regenerate">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <textarea class="modal-textarea" name="changes" id="changesText"
+                      placeholder="Write your changes here..."></textarea>
+            <div class="modal-btn-row">
+                <button type="button" class="modal-btn-cancel" onclick="closeModal('regenerateModal')">Cancel</button>
+                <button type="submit" class="modal-btn-ok">OK — Regenerate</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ══ SAVE MODAL ══
+     Hidden by default. Opened when user clicks "Save".
+     POSTs the chosen title to /save-plan which stores the plan in the database. -->
+<div class="modal-overlay" id="saveModal">
+    <div class="modal-box">
+        <div class="modal-title">Save your plan</div>
+        <p class="modal-subtitle">Give your plan a name:</p>
+        <form method="POST" action="/save-plan">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input class="modal-input" type="text" name="plan_title"
+                   placeholder="e.g. My Summer Plan" maxlength="100">
+            <div class="modal-btn-row">
+                <button type="button" class="modal-btn-cancel" onclick="closeModal('saveModal')">Cancel</button>
+                <button type="submit" class="modal-btn-ok">OK — Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ══ MAIN CONTENT ══ -->
+<div class="main-content">
+    <div class="content-area">
+
+        <!-- Flash messages (e.g. "Something went wrong" from regenerate) -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}
+                <div class="flash-{{ category }}">{{ message }}</div>
+            {% endfor %}
+        {% endwith %}
+
+        <!-- Title: user's plan name if saved, generic title if fresh -->
+        <h1 class="page-title">
+            {% if saved_plan_title %}
+                {{ saved_plan_title }}
+            {% else %}
+                Your <span>weekly</span> meal plan!
+            {% endif %}
+        </h1>
+        <!-- Subtitle: instruction text for fresh plan, empty space for saved plan -->
+        <p class="page-subtitle">
+            {% if saved_plan_title %}
+                &nbsp;
+            {% else %}
+                Here is your personalized plan. Save it or ask for changes.
+            {% endif %}
+        </p>
+
+        <!-- ══ CALORIES BAR ══
+             Only rendered if Claude returned calories_per_day in the JSON.
+             This key may be absent in older saved plans. -->
+        {% if plan.calories_per_day %}
+        <div class="calories-bar">
+            Recommended daily intake: <span>{{ plan.calories_per_day }}</span> kcal
+        </div>
+        {% endif %}
+
+        <!-- ══ DAY TABS ══
+             Generated from plan.days — one button per day.
+             loop.first = index 0 = "Day 1" is active by default.
+             loop.index0 is passed to showDay() in JS. -->
+        <div class="day-tabs" id="dayTabs">
+            {% for day in plan.days %}
+            <button class="day-tab {% if loop.first %}active{% endif %}"
+                    onclick="showDay({{ loop.index0 }})">
+                {{ day.day }}
+            </button>
+            {% endfor %}
+        </div>
+
+        <!-- ══ DAY PANELS ══
+             One panel per day, only the .active one is visible.
+             Each panel loops through 4 fixed meal types.
+             The if meal guard handles cases where Claude omits a meal type. -->
+        <div class="day-panels">
+            {% for day in plan.days %}
+            <div class="day-panel {% if loop.first %}active{% endif %}" id="panel-{{ loop.index0 }}">
+
+                {% for meal_type in ['breakfast', 'lunch', 'dinner', 'snack'] %}
+                {% set meal = day[meal_type] %}
+                {% if meal %}
+                <div class="meal-row">
+                    <div class="meal-type">{{ meal_type }}</div>
+                    <div class="meal-name">{{ meal.name }}</div>
+                    <div class="meal-desc">{{ meal.description }}</div>
+                </div>
+                {% endif %}
+                {% endfor %}
+
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- ══ ACTION BUTTONS ══
+             Two different sets depending on whether this is a fresh or saved plan. -->
+        {% if saved_plan_title %}
+        <!-- SAVED PLAN: navigate back or delete -->
+        <div class="action-row">
+            <a href="/my-plans" class="btn-close-plan">✕ Back to My Plans</a>
+            <!-- Delete form — asks for confirmation before submitting -->
+            <form method="POST" action="/delete-plan/{{ saved_plan_id }}"
+                  onsubmit="return confirm('Delete this plan?')" style="display:inline;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn-delete-this">Delete Plan</button>
+            </form>
+        </div>
+        {% else %}
+        <!-- FRESH PLAN: save to database or regenerate with modifications -->
+        <div class="action-row">
+            <button class="btn-save-plan"  onclick="openModal('saveModal')">Save</button>
+            <button class="btn-regenerate" onclick="openModal('regenerateModal')">Regenerate</button>
+        </div>
+        {% endif %}
+
+    </div>
+
+    <footer>
+        © COPYRIGHT 2026 • NUTRIPLANAI • ALL RIGHTS RESERVED • Developed by <span>GToumb</span>
+    </footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    // ── SIDEBAR TOGGLE (mobile) ──────────────────────────────────────────────────
+    function openSidebar() {
+        document.getElementById('sidebar').classList.add('open');
+        document.getElementById('sidebarOverlay').classList.add('open');
+        document.getElementById('hamburgerBtn').classList.add('hidden');
+    }
+    function closeSidebar() {
+        document.getElementById('sidebar').classList.remove('open');
+        document.getElementById('sidebarOverlay').classList.remove('open');
+        document.getElementById('hamburgerBtn').classList.remove('hidden');
+    }
+
+    // ── DAY TAB SWITCHING ────────────────────────────────────────────────────────
+    // Removes .active from all tabs and panels, then adds it to the clicked index.
+    function showDay(index) {
+        document.querySelectorAll('.day-tab').forEach((t, i) => {
+            t.classList.toggle('active', i === index);
+        });
+        document.querySelectorAll('.day-panel').forEach((p, i) => {
+            p.classList.toggle('active', i === index);
+        });
+    }
+
+    // ── MODAL MANAGEMENT ────────────────────────────────────────────────────────
+    function openModal(id) {
+        document.getElementById(id).classList.add('open');
+    }
+    function closeModal(id) {
+        document.getElementById(id).classList.remove('open');
+        // Clear the changes textarea when closing the Regenerate modal
+        if (id === 'regenerateModal') {
+            document.getElementById('changesText').value = '';
+        }
+    }
+
+    // Close any modal when the user clicks on the dark overlay (outside the card)
+    document.querySelectorAll('.modal-overlay').forEach(function(overlay) {
+        overlay.addEventListener('click', function(e) {
+            // Only close if the click was directly on the overlay, not the modal box
+            if (e.target === overlay) {
+                overlay.classList.remove('open');
+            }
+        });
+    });
+</script>
+</body>
+</html>

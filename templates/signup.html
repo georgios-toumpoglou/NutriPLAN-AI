@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<!--
+    signup.html — NutriPLAN AI
+    Registration page. Collects name, email, age, gender, height, and password.
+
+    Key design decisions:
+    - height_cm is NOT a WTForms field in the HTML — it's a plain hidden input.
+      The visible fields (metric cm input OR imperial ft+in inputs) are handled
+      by JavaScript, which converts the value to cm and writes it into the hidden
+      input before the form submits. This allows imperial/metric toggle without
+      changing the backend.
+    - Password match is checked in real time via JavaScript as the user types,
+      AND again server-side by WTForms' EqualTo validator on submission.
+    - On success, redirects to index (home) with a success flash message.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign Up — NutriPLAN AI</title>
+
+    <!-- Google Fonts: Quicksand -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@300..700&display=swap" rel="stylesheet">
+
+    <!-- Bootstrap 5 -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <style>
+        /* ══ DESIGN TOKENS ══ */
+        :root {
+            --green-mid:    #99CC99;
+            --white:        #FFFFFF;
+            --green-light:  #CCFFCC;
+            --green-dark:   #5E995E;
+            --green-bright: #99FF99;
+            --bg:           #F7FAF7;
+            --text-dark:    #2d5a2d;
+            --text-body:    #3a5a3a;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html { color-scheme: light only; }
+
+        /* flex column so footer sticks to the bottom */
+        body {
+            font-family: 'Quicksand', sans-serif;
+            background-color: var(--bg) !important;
+            color: var(--text-body) !important;
+            font-weight: 400;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ══ NAVBAR ══ — only "Log in" shown (user is on the sign-up page) */
+        .navbar-custom {
+            background-color: var(--bg);
+            width: 100%;
+            padding: 18px 40px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .navbar-logo-img {
+            height: 6vh;
+            min-height: 36px;
+            max-height: 56px;
+            width: auto;
+            display: block;
+        }
+
+        /* Filled button — matches the "Log in" button on index.html */
+        .btn-login-nav {
+            background: var(--green-dark);
+            border: 2px solid var(--green-dark);
+            color: var(--white);
+            font-family: 'Quicksand', sans-serif;
+            font-weight: 600;
+            font-size: 0.95rem;
+            border-radius: 20px;
+            padding: 7px 22px;
+            text-decoration: none;
+            display: inline-block;
+            transition: background 0.2s;
+        }
+        .btn-login-nav:hover {
+            background: var(--text-dark);
+            border-color: var(--text-dark);
+            color: var(--white);
+            text-decoration: none;
+        }
+
+        /* ══ MAIN CONTENT ══ */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 40px 20px 30px;
+        }
+
+        .page-title {
+            font-family: 'Quicksand', sans-serif;
+            font-weight: 700;
+            font-size: 2.4rem;
+            color: var(--green-dark);
+            margin-bottom: 32px;
+            text-align: center;
+        }
+
+        /* ══ FORM CARD ══ */
+        .form-card {
+            background: var(--green-mid);
+            border-radius: 28px;
+            padding: 36px 44px 40px;
+            width: 100%;
+            max-width: 580px;
+        }
+
+        /* WTForms-rendered labels — white on green */
+        .form-card label {
+            font-family: 'Quicksand', sans-serif;
+            font-weight: 700;
+            font-size: 1rem;
+            color: var(--white);
+            margin-bottom: 5px;
+            display: block;
+        }
+
+        /* All input fields and selects inside the form card */
+        .form-card input,
+        .form-card select {
+            width: 100%;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-family: 'Quicksand', sans-serif;
+            font-size: 0.97rem;
+            color: var(--text-dark);
+            background: var(--white);
+            margin-bottom: 18px;
+            outline: none;
+            transition: box-shadow 0.2s;
+        }
+
+        .form-card input:focus,
+        .form-card select:focus {
+            box-shadow: 0 0 0 3px rgba(94,153,94,0.35);
+        }
+
+        .form-card select { appearance: auto; }
+
+        /* WTForms server-side validation errors — light pink on green */
+        .field-error {
+            color: #fff0f0;
+            font-size: 0.82rem;
+            font-weight: 600;
+            margin-top: -14px;
+            margin-bottom: 12px;
+            display: block;
+        }
+
+        /* Flash error from the route (e.g. "email already registered") */
+        .flash-error {
+            background: #f8d7da;
+            color: #842029;
+            border-radius: 10px;
+            padding: 10px 16px;
+            margin-bottom: 18px;
+            font-weight: 600;
+            font-size: 0.92rem;
+            width: 100%;
+            max-width: 580px;
+            text-align: center;
+        }
+
+        /* ══ METRIC / IMPERIAL TOGGLE ══
+           Two buttons that switch the visible height input.
+           The active button gets a white background with dark text. */
+        .unit-toggle {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+
+        .unit-btn {
+            flex: 1;
+            padding: 8px 0;
+            border: 2px solid var(--white);
+            border-radius: 20px;
+            background: transparent;
+            color: var(--white);
+            font-family: 'Quicksand', sans-serif;
+            font-weight: 600;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s;
+        }
+
+        .unit-btn.active {
+            background: var(--white);
+            color: var(--green-dark);
+        }
+
+        /* ft and in inputs sit side by side in imperial mode */
+        .imperial-row { display: flex; gap: 10px; }
+        .imperial-row input { flex: 1; margin-bottom: 18px; }
+
+        /* ══ SUBMIT BUTTON ══ */
+        .btn-submit {
+            display: block;
+            margin: 8px auto 0;
+            background: var(--bg);
+            border: none;
+            border-radius: 22px;
+            padding: 12px 40px;
+            font-family: 'Quicksand', sans-serif;
+            font-weight: 600;
+            font-size: 1.05rem;
+            color: var(--green-dark);
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s;
+        }
+        .btn-submit:hover {
+            background: var(--green-light);
+            color: var(--text-dark);
+        }
+
+        /* ══ FOOTNOTE ══ — italic small text below the card */
+        .footnote {
+            font-family: 'Quicksand', sans-serif;
+            font-size: 0.82rem;
+            color: var(--text-body);
+            margin-top: 16px;
+            text-align: left;
+            width: 100%;
+            max-width: 580px;
+            font-style: italic;
+        }
+
+        /* ══ GENDER RADIO BUTTONS ══
+           Rendered as a horizontal group of labelled radio inputs.
+           accent-color sets the radio button fill colour on modern browsers. */
+        .radio-group {
+            display: flex;
+            gap: 24px;
+            margin-bottom: 18px;
+        }
+
+        .radio-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-family: 'Quicksand', sans-serif;
+            font-weight: 600;
+            font-size: 1rem;
+            color: var(--white);
+            cursor: pointer;
+        }
+
+        .radio-label input[type="radio"] {
+            width: 18px;
+            height: 18px;
+            margin: 0;
+            accent-color: var(--green-dark);
+            cursor: pointer;
+        }
+
+        /* ══ "ALREADY HAVE AN ACCOUNT?" LINK ══ */
+        .already-account {
+            font-family: 'Quicksand', sans-serif;
+            font-size: 0.92rem;
+            font-weight: 500;
+            color: var(--text-body);
+            margin-top: 12px;
+            text-align: center;
+        }
+
+        .already-account a { color: var(--green-dark); font-weight: 700; text-decoration: none; }
+        .already-account a:hover { text-decoration: underline; }
+
+        /* ══ FOOTER ══ */
+        footer {
+            background-color: var(--green-dark);
+            color: var(--white);
+            text-align: center;
+            padding: 20px 0;
+            font-family: 'Quicksand', sans-serif;
+            font-weight: 500;
+            font-size: 0.82rem;
+            letter-spacing: 0.04em;
+        }
+        footer span { color: var(--green-bright); font-weight: 700; }
+
+        /* ══ MOBILE ══ */
+        @media (max-width: 600px) {
+            .navbar-custom { padding: 14px 20px 10px; }
+            .page-title    { font-size: 1.8rem; }
+            .form-card     { padding: 26px 22px 30px; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ══ NAVBAR ══ -->
+<nav class="navbar-custom">
+    <a href="/">
+        <img src="{{ url_for('static', filename='img/logo.png') }}"
+             alt="NutriPLAN AI" class="navbar-logo-img">
+    </a>
+    <a href="/login" class="btn-login-nav">Log in</a>
+</nav>
+
+<!-- ══ MAIN CONTENT ══ -->
+<div class="main-content">
+
+    <h1 class="page-title">Sign Up</h1>
+
+    <!-- Flash messages from the route (e.g. duplicate email) -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+            <div class="flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    {% endwith %}
+
+    <!-- ══ SIGN UP FORM ══ -->
+    <div class="form-card">
+        <form method="POST" action="/signup">
+            <!-- CSRF token hidden input — required by Flask-WTF for all POST forms -->
+            {{ form.hidden_tag() }}
+
+            <!-- Name -->
+            {{ form.name.label }}
+            {{ form.name(placeholder='') }}
+            {% for error in form.name.errors %}
+                <span class="field-error">{{ error }}</span>
+            {% endfor %}
+
+            <!-- Email -->
+            {{ form.email.label }}
+            {{ form.email(placeholder='') }}
+            {% for error in form.email.errors %}
+                <span class="field-error">{{ error }}</span>
+            {% endfor %}
+
+            <!-- Age -->
+            {{ form.age.label }}
+            {{ form.age(placeholder='') }}
+            {% for error in form.age.errors %}
+                <span class="field-error">{{ error }}</span>
+            {% endfor %}
+
+            <!-- Gender — WTForms RadioField iterated to render styled radio buttons -->
+            <label>Gender</label>
+            <div class="radio-group">
+                {% for subfield in form.gender %}
+                <label class="radio-label">
+                    {{ subfield() }}
+                    {{ subfield.label.text }}
+                </label>
+                {% endfor %}
+            </div>
+            {% for error in form.gender.errors %}
+                <span class="field-error">{{ error }}</span>
+            {% endfor %}
+
+            <!-- ══ HEIGHT — METRIC / IMPERIAL TOGGLE ══
+                 JavaScript switches between these two divs based on the active unit.
+                 Only the hidden input (id="height_cm") is submitted to Flask.
+                 JS converts ft+in → cm before submission if imperial is selected. -->
+            <div class="unit-toggle">
+                <button type="button" class="unit-btn active" id="btn-metric"   onclick="setUnit('metric')">Metric (cm)</button>
+                <button type="button" class="unit-btn"        id="btn-imperial" onclick="setUnit('imperial')">Imperial (ft / in)</button>
+            </div>
+
+            <!-- Metric input — visible by default -->
+            <div id="height-metric">
+                <label>Height (cm)</label>
+                <input type="number" id="height_cm_input" placeholder="e.g. 175" min="50" max="250" autocomplete="off">
+            </div>
+
+            <!-- Imperial input — hidden by default, shown when imperial is selected -->
+            <div id="height-imperial" style="display:none;">
+                <label>Height</label>
+                <div class="imperial-row">
+                    <input type="number" id="height_ft" placeholder="ft" min="1" max="8"  autocomplete="off">
+                    <input type="number" id="height_in" placeholder="in" min="0" max="11" autocomplete="off">
+                </div>
+            </div>
+
+            <!-- Hidden input that JS fills with the cm value before submit.
+                 Flask reads this as request.form['height_cm'] in the route. -->
+            <input type="hidden" id="height_cm" name="height_cm" value="">
+
+            <!-- Password -->
+            {{ form.password.label }}
+            {{ form.password(placeholder='') }}
+            {% for error in form.password.errors %}
+                <span class="field-error">{{ error }}</span>
+            {% endfor %}
+
+            <!-- Confirm Password
+                 Server-side: WTForms EqualTo validator checks on submit.
+                 Client-side: JS checkPasswordMatch() checks as the user types. -->
+            {{ form.confirm_password.label }}
+            {{ form.confirm_password(placeholder='') }}
+            {% for error in form.confirm_password.errors %}
+                <span class="field-error">{{ error }}</span>
+            {% endfor %}
+            <!-- Jinja fallback check in case WTForms error doesn't render -->
+            {% if form.password.data and form.confirm_password.data and form.password.data != form.confirm_password.data %}
+                <span class="field-error">Passwords must match.</span>
+            {% endif %}
+            <!-- Real-time JS message (filled/cleared by checkPasswordMatch) -->
+            <span id="password-match-msg" class="field-error" style="margin-top:-10px;"></span>
+
+            <button type="submit" class="btn-submit">Create Account</button>
+
+        </form>
+    </div>
+
+    <p class="footnote">* You can always update your details in the Profile tab.</p>
+
+    <p class="already-account">Already have an account? <a href="/login">Log in</a></p>
+
+</div>
+
+<!-- ══ FOOTER ══ -->
+<footer>
+    © COPYRIGHT 2026 • NUTRIPLANAI • ALL RIGHTS RESERVED • Developed by <span>GToumb</span>
+</footer>
+
+<!-- Bootstrap JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    // ── REAL-TIME PASSWORD MATCH CHECK ──────────────────────────────────────────
+    // Provides immediate feedback as the user types in the Confirm Password field.
+    const passField    = document.getElementById('password');
+    const confirmField = document.getElementById('confirm_password');
+    const matchMsg     = document.getElementById('password-match-msg');
+
+    function checkPasswordMatch() {
+        if (confirmField.value === '') {
+            matchMsg.textContent = '';  // no message if the field is empty
+            return;
+        }
+        if (passField.value !== confirmField.value) {
+            matchMsg.textContent = 'Passwords do not match.';
+            matchMsg.style.color = '#fff0f0';
+        } else {
+            matchMsg.textContent = '✓ Passwords match.';
+            matchMsg.style.color = '#99FF99';  // bright green = success
+        }
+    }
+
+    if (passField && confirmField) {
+        passField.addEventListener('input', checkPasswordMatch);
+        confirmField.addEventListener('input', checkPasswordMatch);
+    }
+
+    // ── METRIC / IMPERIAL HEIGHT TOGGLE ─────────────────────────────────────────
+    // Tracks which unit system is currently active.
+    let currentUnit = 'metric';
+
+    function setUnit(unit) {
+        currentUnit = unit;
+
+        // Toggle the active class on the two toggle buttons
+        document.getElementById('btn-metric').classList.toggle('active',   unit === 'metric');
+        document.getElementById('btn-imperial').classList.toggle('active', unit === 'imperial');
+
+        // Show/hide the appropriate input section
+        document.getElementById('height-metric').style.display   = unit === 'metric'   ? 'block' : 'none';
+        document.getElementById('height-imperial').style.display = unit === 'imperial' ? 'block' : 'none';
+    }
+
+    // ── PRE-SUBMIT HEIGHT CONVERSION ────────────────────────────────────────────
+    // Before the form is submitted, convert the visible height input value to cm
+    // and write it into the hidden 'height_cm' field that Flask reads.
+    document.querySelector('form').addEventListener('submit', function() {
+        if (currentUnit === 'metric') {
+            // Simply copy the cm value directly
+            const val = document.getElementById('height_cm_input').value;
+            document.getElementById('height_cm').value = val;
+        } else {
+            // Convert feet + inches to centimetres: (ft × 12 + in) × 2.54
+            const ft     = parseFloat(document.getElementById('height_ft').value) || 0;
+            const inches = parseFloat(document.getElementById('height_in').value) || 0;
+            const totalCm = Math.round((ft * 12 + inches) * 2.54);
+            document.getElementById('height_cm').value = totalCm;
+        }
+    });
+</script>
+</body>
+</html>
