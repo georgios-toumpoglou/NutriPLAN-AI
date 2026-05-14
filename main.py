@@ -20,8 +20,14 @@ app = Flask(__name__)
 
 # ── APP CONFIGURATION ──────────────────────────────────────────────────────────
 
-# SQLite database file stored locally
-app.config['SQLALCHEMY_DATABASE_URI']        = 'sqlite:///nutriplan.db'
+# Database URI — uses PostgreSQL on Render (from environment variable),
+# falls back to local SQLite for development.
+# Note: Render provides 'postgres://' but SQLAlchemy requires 'postgresql://',
+# so we replace it if needed.
+database_url = os.getenv('DATABASE_URL', 'sqlite:///nutriplan.db')
+if database_url.startswith('postgres://'):
+    database_url = database_url.replace('postgres://', 'postgresql://', 1)
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 # Disable event tracking — not needed and wastes memory
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Secret key for session signing and CSRF protection — loaded from .env
